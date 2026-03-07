@@ -1,0 +1,152 @@
+# Deploying RVGRT Server and Game Server to Oracle Cloud Infrastructure (OCI)
+
+This guide takes you through the step-by-step process of deploying the RVGRT backend (FastAPI game server + Django logger interface) on an Oracle Cloud Compute instance, under the domain `log.rvgrt.rubenvlieger.nl`.
+
+## 1. Create an Oracle Cloud VM Instance
+
+1. Log into your Oracle Cloud Console.
+2. Go to **Compute** -> **Instances** and click **Create Instance**.
+3. Name your instance (e.g., `rvgrt-backend`).
+4. **Image and Shape:** 
+   - We recommend Canonical Ubuntu 22.04 LTS or 24.04 LTS.
+   - For shape, the "Always Free" Ampere A1 Compute (ARM) with 4 OCPUs and 24GB RAM is more than enough. Or an AMD micro instance will also suffice, as this server is lightweight.
+5. **Networking:**
+   - Create a new Virtual Cloud Network (VCN) or use an existing one. Ensure it assigns a Public IPv4 address.
+6. **SSH Keys:** Add your public SSH key for access.
+7. Click **Create** and wait for the instance to provision. Note down its Public IP address.
+
+## 2. Oracle VCN Security List (Firewall)
+Before configuring the VM, you must open HTTP and HTTPS ports in the Oracle Cloud VCN.
+
+1. Navigate to your Instance -> click its attached VCN -> Security Lists -> Default Security List.
+2. Add Ingress Rules:
+   - Source CIDR: `0.0.0.0/0`
+   - Destination Port Range: `80` (HTTP)
+   - Source CIDR: `0.0.0.0/0`
+   - Destination Port Range: `443` (HTTPS)
+
+## 3. Server Setup
+
+SSH into your new instance:
+ssh ubuntu@YOUR_PUBLIC_IP
+
+### Install Docker and Docker Compose
+Run the following commands to install Docker cleanly:
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# Optionally allow non-root docker:
+sudo usermod -aG docker $USER
+newgrp docker
+
+## 4. Deploying the Multi-Container Architecture
+
+1. Clone your backend repository onto the server:
+   git clone https://github.com/YourName/RVGRT-server.git
+   cd RVGRT-server
+
+2. Deploy the containers in detached mode:
+   docker compose up -d --build
+
+At this point, the game server (port 8000) and the logger admin UI (port 8001) are running locally on the docker bridge network. A shared volume in `./logs` tracks the chat logs.
+
+## 5. Domain Configuration and Reverse Proxy (NGINX)
+
+You specified `log.rvgrt.rubenvlieger.nl`. You must point this A record to your VM's Public IP in your domain registrar (e.g., Cloudflare, Namecheap).
+
+1. Install Nginx and Certbot:
+   sudo apt-get install -y nginx certbot python3-certbot-nginx
+
+2. Configure Nginx to reverse proxy the requests. Create a new site config:
+   sudo nano /etc/nginx/sites-available/rvgrt
+
+   Add the following configuration:
+   ```nginx
+   server {
+       listen 80;
+       server_name log.rvgrt.rubenvlieger.nl;
+
+       # Route the admin/logger requests to the Django container
+       location / {
+           proxy_pass http://localhost:8001;
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+
+       # Route WebSockets to the FastAPI application
+       location /ws {
+           proxy_pass http://localhost:8000/ws;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+   }
+   ```
+   *(Note: Adjust the above if you plan to keep `/ws` hosted under game.rvgrt.rubenvlieger.nl later on, but for now this multiplexes both on the same domain).*
+
+3. Enable the config and restart Nginx:
+   sudo ln -s /etc/nginx/sites-available/rvgrt /etc/nginx/sites-enabled/
+   sudo nginx -t
+   sudo systemctl restart nginx
+
+4. Secure with HTTPS (Let's Encrypt):
+   sudo certbot --nginx -d log.rvgrt.rubenvlieger.nl
+
+## 6. Hosting Multiple Websites on the Same Server
+
+If you have another Django server running on this same Oracle instance (e.g., an older project on port `8080`), you can serve both from the same public IP by using NGINX Server Blocks (Virtual Hosts). NGINX routes incoming HTTP requests to different internal ports based on the domain name (`server_name`).
+
+1. Point your other domain (e.g., `myoldsite.com`) to the same Oracle Public IP.
+2. Create a new file for the old site in `/etc/nginx/sites-available/oldsite` with:
+   ```nginx
+   server {
+       listen 80;
+       server_name myoldsite.com www.myoldsite.com;
+
+       location / {
+           proxy_pass http://localhost:8080; # Change to whatever port your old Django site runs on
+           proxy_set_header Host $host;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+           proxy_set_header X-Forwarded-Proto $scheme;
+       }
+   }
+   ```
+3. Enable it alongside your RVGRT config:
+   sudo ln -s /etc/nginx/sites-available/oldsite /etc/nginx/sites-enabled/
+   sudo nginx -t
+   sudo systemctl restart nginx
+4. Secure the new site with Certbot:
+   sudo certbot --nginx -d myoldsite.com -d www.myoldsite.com
+
+Now, when a user visits `log.rvgrt.rubenvlieger.nl`, NGINX sends them to port 8001. When they visit `myoldsite.com`, it sends them to port 8080!
+
+## 7. Security Review & Production Readiness Checklist
+
+As requested, here is a simple verification regarding security:
+
+1. **Denial of Service (DDoS):** As a hobby project, standard WebSockets max connections inside FastAPI limits connection spam (the game is capped at 16 players). Nginx additionally acts as an HTTP buffer, but you have stated you don't care if people DDoS it. Still, the `connect()` bounds guard the async loop from crashing via out-of-memory.
+2. **Cheating:** The server blindly echoes position data (`PlayerStateData`) in its current form. This means players can cheat to move anywhere. The backend is currently an authoritative message-bus rather than an authoritative physics engine. For a hobby path-tracing tech demo, client-authoritative movement is perfectly acceptable.
+3. **Internal Endpoints:** The Django admin sends chat injects to the FastAPI server via `POST /internal/broadcast`. Since this request comes from `localhost` / internal docker network, external users cannot hit this endpoint directly over Nginx unless we manually expose it (which we explicitly did not route in Nginx).
+4. **Log Security:** The Django `/admin/` view must be protected by standard Django authentication to prevent random players from reading server IPs and chat IPs. You will need to create a Django superuser once deployed to view the logs.
+
+To create the admin user for logging:
+   docker compose exec rvgrt-logger python manage.py createsuperuser
+
+Once done, you can access the logs securely at `https://log.rvgrt.rubenvlieger.nl/` (or wherever you bound the Django view).

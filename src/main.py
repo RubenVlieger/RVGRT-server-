@@ -1,14 +1,29 @@
 import contextlib
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel
 import asyncio
+import os
+import json
 
 from .models import ClientMessage, ServerInitMessage, PlayerStateMessage, ChatMessage, BlockUpdateMessage
 from .server import server
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rvgrt.main")
+
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+fh = logging.FileHandler("logs/server.log")
+fh.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+logging.getLogger("rvgrt").addHandler(fh)
+# Prevent propagation if it causes double logs in console, but simple basicConfig will handle it.
+# Actually basicConfig sets handlers on root. Our file handler is on "rvgrt" logger.
+
+class InternalChatMessage(BaseModel):
+    message: str
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -47,12 +62,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 import json
                 raw = json.loads(data)
                 
+                # Create a lightweight string log for states to avoid massive files,
+                # but log full events for chat/blocks.
+                if raw.get('type') != 'state':
+                    logger.info(f"[CLIENT_EVENT] client={client_id} raw_data={json.dumps(raw)}")
+                
                 if raw.get('type') == 'state':
                     msg = PlayerStateMessage.model_validate(raw)
                     server.update_state(client_id, msg.data)
                     
                 elif raw.get('type') == 'chat':
                     msg = ChatMessage.model_validate(raw)
+                    logger.info(f"[CHAT] from client {client_id}: {msg.text}")
                     # Broadcast chat to all other clients instantly
                     msg.client_id = client_id
                     await server.broadcast(msg.model_dump_json(), exclude=client_id)
@@ -75,3 +96,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Unexpected WS error for {client_id}: {e}")
         server.disconnect(client_id)
+
+@app.post("/internal/broadcast")
+async def broadcast_internal(msg: InternalChatMessage):
+    logger.info(f"[CHAT] [SERVER] sending announcement: {msg.message}")
+    chat = ChatMessage(client_id=0, text=msg.message)
+    await server.broadcast(chat.model_dump_json())
+    return {"status": "ok"}
+

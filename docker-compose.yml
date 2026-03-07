@@ -5,5 +5,20 @@ services:
       - "8000:8000"
     volumes:
       - ./src:/app/src
+      - ./logs:/app/logs
     environment:
       - ENVIRONMENT=development
+
+  rvgrt-logger:
+    build: .
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    environment:
+      - ENVIRONMENT=development
+      - FASTAPI_URL=http://rvgrt-backend:8000
+    command: ["uv", "run", "python", "src/logger_admin/manage.py", "runserver", "0.0.0.0:8001"]
+    depends_on:
+      - rvgrt-backend
