@@ -1,6 +1,7 @@
 services:
   rvgrt-backend:
     build: .
+    image: rvgrt-base:latest
     ports:
       - "8000:8000"
     volumes:
@@ -8,9 +9,14 @@ services:
       - ./logs:/app/logs
     environment:
       - ENVIRONMENT=development
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   rvgrt-logger:
-    build: .
+    image: rvgrt-base:latest
     ports:
       - "8001:8001"
     volumes:
@@ -22,3 +28,8 @@ services:
     command: ["uv", "run", "python", "src/logger_admin/manage.py", "runserver", "0.0.0.0:8001"]
     depends_on:
       - rvgrt-backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
