@@ -16,6 +16,7 @@ services:
         max-file: "3"
 
   rvgrt-logger:
+    build: .
     image: rvgrt-base:latest
     ports:
       - "8001:8001"
