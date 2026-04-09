@@ -2,8 +2,6 @@ services:
   rvgrt-backend:
     build: .
     image: rvgrt-base:latest
-    ports:
-      - "8000:8000"
     volumes:
       - ./src:/app/src
       - ./logs:/app/logs
@@ -14,12 +12,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - web-proxy
+      - default
 
   rvgrt-logger:
     build: .
     image: rvgrt-base:latest
-    ports:
-      - "8001:8001"
     volumes:
       - ./src:/app/src
       - ./logs:/app/logs
@@ -34,3 +33,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - web-proxy
+      - default
+
+networks:
+  web-proxy:
+    external: true
