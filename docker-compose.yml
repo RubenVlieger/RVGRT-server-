@@ -25,7 +25,9 @@ services:
     environment:
       - ENVIRONMENT=development
       - FASTAPI_URL=http://rvgrt-backend:8000
-    command: ["uv", "run", "python", "src/logger_admin/manage.py", "runserver", "0.0.0.0:8001"]
+    command: >
+      bash -c "uv run python src/logger_admin/manage.py collectstatic --noinput &&
+      uv run uvicorn logger_admin.asgi:application --host 0.0.0.0 --port 8001 --app-dir src/logger_admin"
     depends_on:
       - rvgrt-backend
     logging:
