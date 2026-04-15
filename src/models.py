@@ -36,6 +36,19 @@ class BlockUpdateMessage(BaseMessage):
     mat_id: int
 
 
+class BlockSyncMessage(BaseModel):
+    """Sent to newly connected clients with the full list of accumulated block changes."""
+
+    type: Literal["block_sync"] = "block_sync"
+    changes: List[Dict[str, int]]
+
+
+class BlockResetMessage(BaseModel):
+    """Broadcast to all clients when block changes are reset (e.g. /reset command)."""
+
+    type: Literal["block_reset"] = "block_reset"
+
+
 # Discriminated union for parsing incoming websocket messages
 ClientMessage = Annotated[
     Union[PlayerStateMessage, ChatMessage, BlockUpdateMessage],

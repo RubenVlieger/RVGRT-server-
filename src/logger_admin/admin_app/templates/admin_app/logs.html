@@ -36,6 +36,15 @@
         </form>
     </div>
 
+    <div class="chat-form">
+        <h3>Reset All Block Changes</h3>
+        <p style="font-size: 12px; color: #999;">Restore all edited blocks to their procedural terrain state. This notifies all connected clients.</p>
+        <form method="POST" action="{% url 'reset_blocks' %}">
+            {% csrf_token %}
+            <button type="submit" style="background: #c62828;">Reset All Block Changes</button>
+        </form>
+    </div>
+
     <h3>Recent Server Logs (last 1000 lines, refresh to update)</h3>
     <div class="log-box" id="logBox">
         <pre>{% for line in logs %}{{ line }}{% endfor %}</pre>

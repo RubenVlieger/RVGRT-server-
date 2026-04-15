@@ -10,9 +10,12 @@ import json
 from .models import (
     ClientMessage,
     ServerInitMessage,
+    ServerStateBroadcast,
     PlayerStateMessage,
     ChatMessage,
     BlockUpdateMessage,
+    BlockSyncMessage,
+    BlockResetMessage,
 )
 from .server import server
 
@@ -60,9 +63,15 @@ async def websocket_endpoint(websocket: WebSocket):
         return
 
     try:
-        # Send init message
+        # Send init message with client ID
         init_msg = ServerInitMessage(client_id=client_id, max_players=16)
         await websocket.send_text(init_msg.model_dump_json())
+
+        # Send full block change sync so new client sees all prior edits
+        changes = server.get_block_changes()
+        if changes:
+            sync_msg = BlockSyncMessage(changes=changes)
+            await websocket.send_text(sync_msg.model_dump_json())
 
         while True:
             # We expect JSON payloads containing a "type"
@@ -89,13 +98,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif raw.get("type") == "chat":
                     msg = ChatMessage.model_validate(raw)
                     logger.info(f"[CHAT] from client {client_id}: {msg.text}")
-                    # Broadcast chat to all other clients instantly
-                    msg.client_id = client_id
-                    await server.broadcast(msg.model_dump_json(), exclude=client_id)
+
+                    if msg.text.strip() == "/reset":
+                        server.reset_block_changes()
+                        reset_msg = BlockResetMessage()
+                        await server.broadcast(reset_msg.model_dump_json())
+                        logger.info("[BLOCK_RESET] triggered by /reset chat command")
+                    else:
+                        msg.client_id = client_id
+                        await server.broadcast(msg.model_dump_json(), exclude=client_id)
 
                 elif raw.get("type") == "block":
                     msg = BlockUpdateMessage.model_validate(raw)
-                    # Broadcast block update directly
+                    server.add_block_change(msg.x, msg.y, msg.z, msg.mat_id)
                     msg.client_id = client_id
                     await server.broadcast(msg.model_dump_json(), exclude=client_id)
                 else:
@@ -111,6 +126,15 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Unexpected WS error for {client_id}: {e}")
         server.disconnect(client_id)
+
+
+@app.post("/internal/reset_blocks")
+async def reset_blocks():
+    server.reset_block_changes()
+    reset_msg = BlockResetMessage()
+    await server.broadcast(reset_msg.model_dump_json())
+    logger.info("[BLOCK_RESET] triggered by internal API")
+    return {"status": "ok", "changes_cleared": True}
 
 
 @app.post("/internal/broadcast")

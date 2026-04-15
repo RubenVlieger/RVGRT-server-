@@ -21,6 +21,10 @@ class GameServer:
         self.last_seen: Dict[int, float] = {}
         self._next_id = 1
 
+        # Authority store for block changes.
+        # {(x, y, z): mat_id} — later edits to the same voxel overwrite.
+        self._block_changes: Dict[tuple, int] = {}
+
     async def connect(self, websocket: WebSocket) -> int | None:
         if len(self.active_connections) >= MAX_PLAYERS:
             return None
@@ -57,6 +61,25 @@ class GameServer:
                 await ws.send_text(message)
             except Exception as e:
                 logger.error(f"Failed to broadcast to {cid}: {e}")
+
+    # ── Block Change Authority ─────────────────────────────────────────────
+    # The server maintains a deduplicated dict of all block changes.
+    # New edits overwrite previous ones at the same voxel coordinate.
+
+    def add_block_change(self, x: int, y: int, z: int, mat_id: int):
+        """Record a block change. Later edits to the same voxel overwrite."""
+        self._block_changes[(x, y, z)] = mat_id
+
+    def get_block_changes(self) -> list:
+        """Return the current deduplicated list of block changes."""
+        return [
+            {"x": coord[0], "y": coord[1], "z": coord[2], "mat_id": mat_id}
+            for coord, mat_id in self._block_changes.items()
+        ]
+
+    def reset_block_changes(self):
+        """Clear all block changes (e.g. on /reset)."""
+        self._block_changes.clear()
 
     async def game_loop(self):
         logger.info("Starting 60Hz game loop")

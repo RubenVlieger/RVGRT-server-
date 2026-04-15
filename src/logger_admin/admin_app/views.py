@@ -40,3 +40,14 @@ def admin_logs_view(request):
         lines = ["Log file does not exist yet. Please start the FastAPI server."]
 
     return render(request, "admin_app/logs.html", {"logs": lines})
+
+
+@staff_member_required
+def reset_blocks_view(request):
+    if request.method == "POST":
+        try:
+            backend_url = os.environ.get("FASTAPI_URL", "http://rvgrt-backend:8000")
+            requests.post(f"{backend_url}/internal/reset_blocks", timeout=2)
+        except Exception as e:
+            pass
+    return redirect("admin_logs")
